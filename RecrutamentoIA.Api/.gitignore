@@ -8,5 +8,8 @@ obj/
 *.log
 
 ## Segredos (só existem no servidor / máquina local)
-api-credentials.json
 appsettings.*.local.json
+
+## Credenciais de usuários (login/senha em CSV) — não versionar dados reais
+Data/*.csv
+!Data/users.example.csv

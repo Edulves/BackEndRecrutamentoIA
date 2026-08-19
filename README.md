@@ -16,10 +16,14 @@ para gerar um ranking de compatibilidade com pontos fortes, pontos fracos e habi
 
 ```
 RecrutamentoIA.Api/
-├── Auth/                       # autenticação por API Key (X-Api-Key)
-│   ├── ApiKeyAuthenticationMiddleware.cs
-│   ├── ApiKeyCredentials.cs
-│   └── ApiKeyCredentialsLoader.cs
+├── Auth/                       # autenticação por usuário/senha (CSV) + JWT
+│   ├── AuthEndpoints.cs                # /api/auth/registrar e /api/auth/login
+│   ├── JwtSettings.cs                  # configuração "Jwt" (Secret, validação fail-closed)
+│   ├── PasswordHasher.cs                # hash PBKDF2-SHA256 + salt (senha nunca em texto puro)
+│   ├── TokenService.cs                  # emissão de tokens JWT (HS256)
+│   ├── UserRecord.cs / UserRepository.cs# persistência de usuários em Data/users.csv
+├── Data/
+│   └── users.example.csv                # exemplo do formato (o arquivo real NÃO é versionado)
 ├── Filters/
 │   └── MultipartDocumentationFilter.cs
 ├── Models/
@@ -46,23 +50,39 @@ dotnet run
 - Swagger: `http://localhost:5105/swagger`
 - Scalar: `http://localhost:5105/scalar`
 
-> No primeiro `dotnet run`, se o `api-credentials.json` não existir, ele é criado automaticamente
-> com uma chave aleatória (exibida no console). Essa chave é usada no cabeçalho `X-Api-Key`.
+> Antes de rodar, defina o segredo JWT em `RecrutamentoIA.Api/appsettings.local.json`
+> (arquivo ignorado pelo git), na seção `Jwt:Secret` — **mínimo 32 bytes**.
+> Exemplo: `"Jwt": { "Secret": "<64 caracteres hexadecimais aleatórios>" }`.
 
-## 🔑 Autenticação por API Key
+## 🔑 Autenticação por usuário/senha + JWT
 
-Todas as rotas exigem o cabeçalho `X-Api-Key`:
+Os usuários ficam em `RecrutamentoIA.Api/Data/users.csv` (sem banco de dados) e a senha é
+armazenada apenas como **hash PBKDF2 + salt** — nunca em texto puro.
 
-```http
-POST /api/analisar
-X-Api-Key: SUA_CHAVE
-```
+1. Crie um usuário:
+   ```http
+   POST /api/auth/registrar
+   Content-Type: application/json
 
-- As chaves ficam em `RecrutamentoIA.Api/api-credentials.json`.
-- Esse arquivo **está no `.gitignore` e não vai para o git**; o modelo versionado é `api-credentials.example.json`.
-- Em **desenvolvimento**, se o arquivo não existir, ele é criado automaticamente com uma chave aleatória.
-- Em **produção**, copie `api-credentials.example.json` para `api-credentials.json` e defina a chave;
-  sem o arquivo a API **não inicia** (segurança fail-closed).
+   { "username": "admin", "password": "SenhaForte@123" }
+   ```
+2. Faça login e guarde o JWT devolvido:
+   ```http
+   POST /api/auth/login
+   Content-Type: application/json
+
+   { "username": "admin", "password": "SenhaForte@123" }
+   ```
+3. Use o token nas rotas protegidas (ex.: `/api/analisar`):
+   ```http
+   POST /api/analisar
+   Authorization: Bearer SEU_TOKEN_JWT
+   ```
+
+- O segredo de assinatura vem de `Jwt:Secret` em `appsettings.local.json` (mínimo 32 bytes);
+  sem ele a API **não inicia** (segurança fail-closed).
+- As credenciais reais (`Data/users.csv`) **não vão para o git** (veja `.gitignore`);
+  o modelo versionado é `Data/users.example.csv`.
 - A documentação (Swagger/Scalar) fica **livre só em desenvolvimento**.
 
 ## 🔌 Endpoint

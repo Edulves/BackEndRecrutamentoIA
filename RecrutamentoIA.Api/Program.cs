@@ -1,4 +1,6 @@
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.IdentityModel.Tokens;
 using RecrutamentoIA.Api.Auth;
 using RecrutamentoIA.Api.Filters;
 using RecrutamentoIA.Api.Models;
@@ -12,18 +14,40 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddJsonFile("appsettings.local.json", optional: true);
 
 // ─────────────────────────────────────────────────────────────────────────
-// Autenticação por API Key
-// As credenciais vivem em api-credentials.json (arquivo que NÃO vai para o
-// git — está no .gitignore). Em Development, se o arquivo não existir, ele é
-// criado automaticamente com uma chave aleatória (exibida no console).
+// Autenticação por usuário/senha (CSV) + JWT
+// - Os usuários ficam em Data/users.csv (sem banco de dados); a senha é
+//   armazenada apenas como hash PBKDF2 + salt, nunca em texto puro.
+// - O login (POST /api/auth/login) devolve um JWT assinado (HS256) e os
+//   endpoints protegidos (ex.: POST /api/analisar) exigem o cabeçalho
+//   "Authorization: Bearer <token>".
 // ─────────────────────────────────────────────────────────────────────────
-using var startupLoggerFactory = LoggerFactory.Create(l => l.AddSimpleConsole(o => o.SingleLine = true));
-var startupLogger = startupLoggerFactory.CreateLogger("RecrutamentoIA.Api.Auth");
-var apiKeyCredentials = ApiKeyCredentialsLoader.LoadOrCreate(
-    Path.Combine(builder.Environment.ContentRootPath, ApiKeyCredentialsLoader.FileName),
-    builder.Environment.IsDevelopment(),
-    startupLogger);
-builder.Services.AddSingleton(apiKeyCredentials);
+var jwtSettings = builder.Configuration
+    .GetSection(JwtSettings.SectionName)
+    .Get<JwtSettings>()
+    ?? new JwtSettings();
+jwtSettings.Validate();
+
+builder.Services.AddSingleton(jwtSettings);
+builder.Services.AddSingleton(new UserRepository(builder.Environment.ContentRootPath));
+builder.Services.AddSingleton(new TokenService(jwtSettings));
+
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = jwtSettings.Issuer,
+            ValidateAudience = true,
+            ValidAudience = jwtSettings.Audience,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = jwtSettings.SigningKey,
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromMinutes(1),
+        };
+    });
+builder.Services.AddAuthorization();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
@@ -39,17 +63,21 @@ builder.Services.AddSwaggerGen(c =>
             "- `descricaoVaga` (texto) — descrição da vaga.\n" +
             "- `curriculos` (arquivos) — um ou mais currículos (PDF, DOCX, DOC ou TXT).\n\n" +
             "Retorna o ranking dos candidatos ordenado por pontuação (Score).\n\n" +
-            "🔒 **Autenticação**: envie a chave no cabeçalho `X-Api-Key` (veja `api-credentials.json`)."
+            "🔒 **Autenticação**: crie um usuário em `POST /api/auth/registrar`, faça login\n" +
+            "em `POST /api/auth/login` e envie o token JWT no cabeçalho\n" +
+            "`Authorization: Bearer <token>`. Os dados ficam no arquivo CSV `Data/users.csv` (sem banco de dados)."
     });
     c.OperationFilter<MultipartDocumentationFilter>();
 
-    // Documenta o cabeçalho de API Key exigido por todas as rotas.
-    c.AddSecurityDefinition("ApiKey", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    // Documenta o token JWT (Bearer) exigido pelo endpoint protegido.
+    c.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
     {
-        Name = apiKeyCredentials.HeaderName,
+        Name = "Authorization",
         In = Microsoft.OpenApi.Models.ParameterLocation.Header,
-        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
-        Description = "Chave de acesso. Ex.: " + apiKeyCredentials.HeaderName + ": SUA_CHAVE"
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT",
+        Description = "Informe o token obtido em POST /api/auth/login no formato: Bearer SEU_TOKEN"
     });
     c.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
     {
@@ -59,7 +87,7 @@ builder.Services.AddSwaggerGen(c =>
                 Reference = new Microsoft.OpenApi.Models.OpenApiReference
                 {
                     Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
-                    Id = "ApiKey"
+                    Id = "Bearer"
                 }
             },
             Array.Empty<string>()
@@ -101,9 +129,11 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors();
+app.UseAuthentication();
+app.UseAuthorization();
 
-// Exige a chave de API em todas as rotas (exceto a documentação em Development).
-app.UseMiddleware<ApiKeyAuthenticationMiddleware>();
+// Endpoints públicos de autenticação (registro e login). Rotas protegidas usam JWT.
+app.MapAuthEndpoints();
 
 app.MapPost("/api/analisar", async (
     [FromForm] string descricaoVaga,
@@ -159,6 +189,7 @@ app.MapPost("/api/analisar", async (
     return Results.Ok(response);
 })
 .DisableAntiforgery()
+.RequireAuthorization()
 .WithName("AnalisarCurriculos");
 
 app.Run();

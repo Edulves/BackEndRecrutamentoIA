@@ -1,13 +1,28 @@
 @host = http://localhost:5105
-@apiKey = SUA_CHAVE_DO_ARQUIVO_api-credentials.json
+@token = COLE_AQUI_O_TOKEN_RETORNADO_POR_/api/auth/login
 
-### Analisar múltiplos currículos de uma vez (multipart/form-data)
-# Use a chave que está em api-credentials.json (ou a gerada no primeiro `dotnet run`).
-# Envie quantos blocos "curriculos" quiser — cada um é um arquivo.
-# Os arquivos teste-a.txt e teste-b.txt estão na raiz do projeto.
+### 1) Registrar usuário (login/senha) — grava o hash em Data/users.csv
+POST {{host}}/api/auth/registrar
+Content-Type: application/json
+
+{
+  "username": "admin",
+  "password": "SenhaForte@123"
+}
+
+### 2) Login — valida login/senha e devolve o token JWT (Bearer)
+POST {{host}}/api/auth/login
+Content-Type: application/json
+
+{
+  "username": "admin",
+  "password": "SenhaForte@123"
+}
+
+### 3) Analisar currículos (protegido: exige Authorization: Bearer <token>)
 POST {{host}}/api/analisar
+Authorization: Bearer {{token}}
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
-X-Api-Key: {{apiKey}}
 
 ------WebKitFormBoundary
 Content-Disposition: form-data; name="descricaoVaga"
@@ -25,9 +40,9 @@ Content-Type: text/plain
 @teste-b.txt
 ------WebKitFormBoundary--
 
-### (alternativa) Mesma chamada via curl no terminal:
+### 4) (alternativa) mesma chamada via curl:
 # curl.exe -X POST http://localhost:5105/api/analisar ^
-#   -H "X-Api-Key: {{apiKey}}" ^
+#   -H "Authorization: Bearer {{token}}" ^
 #   -F "descricaoVaga=Desenvolvedor .NET com C# e Python" ^
 #   -F "curriculos=@teste-a.txt" ^
 #   -F "curriculos=@teste-b.txt"

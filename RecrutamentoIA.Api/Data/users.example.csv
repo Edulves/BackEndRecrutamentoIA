@@ -1,0 +1,7 @@
+# Formato de Data/users.csv (usuários do sistema, sem banco de dados).
+# Colunas: username,passwordHash,salt,createdAtUtc
+# A senha NUNCA fica em texto puro: apenas o hash PBKDF2 (base64) e o salt (base64).
+# Linhas que começam com # são ignoradas pelo repositório.
+# Fila de exemplo (hash fictício, só para ilustrar o formato):
+username,passwordHash,salt,createdAtUtc
+exemple,AAAAAAAAAAAAAAAAAAAAAAAAAAAARGV8xVVEUBKDF2EXEMPLEAAAAAAAAAAAAAAAAAAAAAAAAAAAA==,SGVsbG9W8d4x2ExemPleZ==,2026-01-01T00:00:00.0000000Z
