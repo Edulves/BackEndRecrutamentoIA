@@ -1,0 +1,21 @@
+# Build / IDE (.NET)
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+# Logs
+*.log
+
+# Segredos — nunca versionar
+api-credentials.json
+appsettings.*.local.json
+*.local.json
+
+# IDE / SO
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db

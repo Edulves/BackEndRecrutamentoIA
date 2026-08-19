@@ -1,0 +1,3 @@
+Curriculo de exemplo A - Candidato João Silva.
+Experiência com C#, .NET, SQL Server e Azure.
+Skills: c#, sql, azure, git

@@ -1,0 +1,12 @@
+## Build / IDE
+bin/
+obj/
+*.user
+*.suo
+.vs/
+.vscode/
+*.log
+
+## Segredos (só existem no servidor / máquina local)
+api-credentials.json
+appsettings.*.local.json

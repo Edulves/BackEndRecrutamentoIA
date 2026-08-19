@@ -1,0 +1,3 @@
+Curriculo de exemplo B - Candidata Maria Souza.
+Experiência com Python, Docker, AWS e React.
+Skills: python, docker, aws, react, node

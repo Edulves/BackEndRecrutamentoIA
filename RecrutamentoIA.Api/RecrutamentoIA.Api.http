@@ -1,0 +1,33 @@
+@host = http://localhost:5105
+@apiKey = SUA_CHAVE_DO_ARQUIVO_api-credentials.json
+
+### Analisar múltiplos currículos de uma vez (multipart/form-data)
+# Use a chave que está em api-credentials.json (ou a gerada no primeiro `dotnet run`).
+# Envie quantos blocos "curriculos" quiser — cada um é um arquivo.
+# Os arquivos teste-a.txt e teste-b.txt estão na raiz do projeto.
+POST {{host}}/api/analisar
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
+X-Api-Key: {{apiKey}}
+
+------WebKitFormBoundary
+Content-Disposition: form-data; name="descricaoVaga"
+
+Desenvolvedor .NET com experiência em C# e Python
+------WebKitFormBoundary
+Content-Disposition: form-data; name="curriculos"; filename="teste-a.txt"
+Content-Type: text/plain
+
+@teste-a.txt
+------WebKitFormBoundary
+Content-Disposition: form-data; name="curriculos"; filename="teste-b.txt"
+Content-Type: text/plain
+
+@teste-b.txt
+------WebKitFormBoundary--
+
+### (alternativa) Mesma chamada via curl no terminal:
+# curl.exe -X POST http://localhost:5105/api/analisar ^
+#   -H "X-Api-Key: {{apiKey}}" ^
+#   -F "descricaoVaga=Desenvolvedor .NET com C# e Python" ^
+#   -F "curriculos=@teste-a.txt" ^
+#   -F "curriculos=@teste-b.txt"
