@@ -43,35 +43,35 @@ public static class UsuariosEndpoints
         .WithName("ListarUsuarios");
 
         // ── Aprovar / suspender o acesso de um usuário ──
-        app.MapPost("/api/usuarios/{username}/permissoes",
-            (HttpContext ctx, string username, AlterarPermissaoRequest request, UserRepository users) =>
-        {
-            if (ResponsavelAprovado(ctx, users) is not { } responsavel)
-                return Results.Forbid();
+        // app.MapPost("/api/usuarios/{username}/permissoes",
+        //     (HttpContext ctx, string username, AlterarPermissaoRequest request, UserRepository users) =>
+        // {
+        //     if (ResponsavelAprovado(ctx, users) is not { } responsavel)
+        //         return Results.Forbid();
 
-            var alvo = (username ?? string.Empty).Trim();
-            if (string.IsNullOrEmpty(alvo))
-                return Results.BadRequest(new { erro = "Informe o nome do usuário na rota." });
-            if (string.Equals(responsavel.Username, alvo, StringComparison.OrdinalIgnoreCase))
-                return Results.BadRequest(new
-                {
-                    erro = "Você não pode alterar a própria permissão pela API. Para isso, edite manualmente Data/users.csv (campo 'allowed').",
-                });
+        //     var alvo = (username ?? string.Empty).Trim();
+        //     if (string.IsNullOrEmpty(alvo))
+        //         return Results.BadRequest(new { erro = "Informe o nome do usuário na rota." });
+        //     if (string.Equals(responsavel.Username, alvo, StringComparison.OrdinalIgnoreCase))
+        //         return Results.BadRequest(new
+        //         {
+        //             erro = "Você não pode alterar a própria permissão pela API. Para isso, edite manualmente Data/users.csv (campo 'allowed').",
+        //         });
 
-            if (!users.SetAllowed(alvo, request.Allowed))
-                return Results.NotFound(new { erro = $"Usuário '{alvo}' não encontrado." });
+        //     if (!users.SetAllowed(alvo, request.Allowed))
+        //         return Results.NotFound(new { erro = $"Usuário '{alvo}' não encontrado." });
 
-            return Results.Ok(new
-            {
-                mensagem = request.Allowed
-                    ? $"Acesso de '{alvo}' aprovado. Ele já pode usar o sistema."
-                    : $"Acesso de '{alvo}' suspenso. Ele não pode mais usar o sistema.",
-                username = alvo,
-                aprovado = request.Allowed,
-            });
-        })
-        .RequireAuthorization()
-        .WithName("AlterarPermissaoUsuario");
+        //     return Results.Ok(new
+        //     {
+        //         mensagem = request.Allowed
+        //             ? $"Acesso de '{alvo}' aprovado. Ele já pode usar o sistema."
+        //             : $"Acesso de '{alvo}' suspenso. Ele não pode mais usar o sistema.",
+        //         username = alvo,
+        //         aprovado = request.Allowed,
+        //     });
+        // })
+        // .RequireAuthorization()
+        // .WithName("AlterarPermissaoUsuario");
     }
 
     /// <summary>
