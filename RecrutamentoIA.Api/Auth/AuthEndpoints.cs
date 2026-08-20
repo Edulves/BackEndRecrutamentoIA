@@ -36,6 +36,9 @@ public static class AuthEndpoints
                 PasswordHash = PasswordHasher.HashPassword(password, out var salt),
                 Salt = salt,
                 CreatedAtUtc = DateTime.UtcNow,
+                // Novos usuários começam bloqueados até o responsável aprovar o acesso
+                // (campo 'allowed' = true em Data/users.csv ou pelo endpoint de permissões).
+                Allowed = false,
             };
 
             if (!users.Create(user))
@@ -49,9 +52,10 @@ public static class AuthEndpoints
                 "/api/auth/login",
                 new
                 {
-                    mensagem = "Usuário criado com sucesso.",
+                    mensagem = "Usuário criado com sucesso. A conta ainda NÃO está liberada para uso: aguarde a aprovação do responsável (campo 'allowed' será ativado).",
                     username = user.Username,
                     criadoEmUtc = user.CreatedAtUtc,
+                    aprovado = user.Allowed,
                 });
         })
         .WithName("RegistrarUsuario");
@@ -80,6 +84,10 @@ public static class AuthEndpoints
                 token = issued.Token,
                 tipo = "Bearer",
                 expiraEmUtc = issued.ExpiresAtUtc,
+                aprovado = user.Allowed,
+                aviso = user.Allowed
+                    ? (string?)null
+                    : "Sua conta ainda não foi aprovada. O acesso aos endpoints protegidos está bloqueado até a liberação pelo responsável.",
             });
         })
         .WithName("Login");

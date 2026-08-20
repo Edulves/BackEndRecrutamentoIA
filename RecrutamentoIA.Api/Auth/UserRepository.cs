@@ -11,7 +11,7 @@ public sealed class UserRepository
 {
     public const string DirectoryName = "Data";
     public const string FileName = "users.csv";
-    public const string CsvHeader = "username,passwordHash,salt,createdAtUtc";
+    public const string CsvHeader = "username,passwordHash,salt,createdAtUtc,allowed";
 
     private readonly string _filePath;
     private readonly object _gate = new();
@@ -40,7 +40,8 @@ public sealed class UserRepository
                 Escape(user.Username),
                 Escape(user.PasswordHash),
                 Escape(user.Salt),
-                user.CreatedAtUtc.ToString("o", CultureInfo.InvariantCulture));
+                user.CreatedAtUtc.ToString("o", CultureInfo.InvariantCulture),
+                user.Allowed ? "true" : "false");
 
             File.AppendAllText(_filePath, line + Environment.NewLine);
             return true;
@@ -62,6 +63,50 @@ public sealed class UserRepository
                 }
             }
             return null;
+        }
+    }
+
+    /// <summary>Lista todos os usuários cadastrados (sem hashes de senha expostos na API).</summary>
+    public IReadOnlyList<UserRecord> List()
+    {
+        lock (_gate)
+        {
+            return ReadAllLines()
+                .Select(ParseRow)
+                .Where(user => user is not null)
+                .Select(user => user!)
+                .ToList();
+        }
+    }
+
+    /// <summary>
+    /// Define o estado <c>allowed</c> de um usuário (aprovação ou suspensão de acesso).
+    /// Retorna <c>false</c> se o usuário não existir.
+    /// </summary>
+    public bool SetAllowed(string username, bool allowed)
+    {
+        var wanted = username?.Trim() ?? string.Empty;
+        lock (_gate)
+        {
+            var lines = ReadAllLines().ToList();
+            for (var i = 0; i < lines.Count; i++)
+            {
+                var user = ParseRow(lines[i]);
+                if (user is not null &&
+                    string.Equals(user.Username, wanted, StringComparison.OrdinalIgnoreCase))
+                {
+                    lines[i] = string.Join(",",
+                        Escape(user.Username),
+                        Escape(user.PasswordHash),
+                        Escape(user.Salt),
+                        user.CreatedAtUtc.ToString("o", CultureInfo.InvariantCulture),
+                        allowed ? "true" : "false");
+
+                    File.WriteAllLines(_filePath, lines);
+                    return true;
+                }
+            }
+            return false;
         }
     }
 
@@ -124,12 +169,19 @@ public sealed class UserRepository
                 ? parsed
                 : DateTime.UtcNow;
 
+        // Linhas antigas (sem a coluna) são tratadas como "não aprovado" (fail-closed).
+        var allowed = fields.Length > 4
+            && bool.TryParse(fields[4].Trim(), out var parsedAllowed)
+                ? parsedAllowed
+                : false;
+
         return new UserRecord
         {
             Username = username,
             PasswordHash = passwordHash,
             Salt = salt,
-            CreatedAtUtc = createdAt
+            CreatedAtUtc = createdAt,
+            Allowed = allowed
         };
     }
 

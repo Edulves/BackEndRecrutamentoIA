@@ -65,7 +65,13 @@ builder.Services.AddSwaggerGen(c =>
             "Retorna o ranking dos candidatos ordenado por pontuação (Score).\n\n" +
             "🔒 **Autenticação**: crie um usuário em `POST /api/auth/registrar`, faça login\n" +
             "em `POST /api/auth/login` e envie o token JWT no cabeçalho\n" +
-            "`Authorization: Bearer <token>`. Os dados ficam no arquivo CSV `Data/users.csv` (sem banco de dados)."
+            "`Authorization: Bearer <token>`. Os dados ficam no arquivo CSV `Data/users.csv` (sem banco de dados).\n\n" +
+            "✅ **Aprovação de acesso**: todo novo usuário nasce com `allowed = false` (bloqueado).\n" +
+            "O responsável libera o acesso marcando `allowed = true` em `Data/users.csv` **ou** chamando\n" +
+            "`POST /api/usuarios/{username}/permissoes` com `{ \"allowed\": true }` (somente outro usuário\n" +
+            "já aprovado pode aprovar alguém; ninguém aprova a si mesmo pela API). Enquanto `allowed` for\n" +
+            "`false`, `POST /api/analisar` responde `403` mesmo com token válido.\n" +
+            "`GET /api/usuarios` lista todos os usuários e o estado de aprovação de cada um."
     });
     c.OperationFilter<MultipartDocumentationFilter>();
 
@@ -134,15 +140,27 @@ app.UseAuthorization();
 
 // Endpoints públicos de autenticação (registro e login). Rotas protegidas usam JWT.
 app.MapAuthEndpoints();
+app.MapUsuariosEndpoints();
 
 app.MapPost("/api/analisar", async (
+    HttpContext http,
     [FromForm] string descricaoVaga,
     IFormFileCollection curriculos,
+    UserRepository users,
     IExtracaoTextoService extracao,
     IAgenteIAService agente,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
+    // Aprovação de acesso: usuário registrado + autenticado + allowed == true.
+    var usuario = users.FindByUsername(http.User.Identity?.Name ?? string.Empty);
+    if (usuario is null)
+        return Results.Unauthorized();
+    if (!usuario.Allowed)
+        return Results.Json(
+            new { erro = "Sua conta ainda não foi aprovada pelo responsável. Quando o campo 'allowed' (Data/users.csv) estiver como true, poderá usar o sistema." },
+            statusCode: StatusCodes.Status403Forbidden);
+
     if (string.IsNullOrWhiteSpace(descricaoVaga))
         return Results.BadRequest(new { erro = "Campo 'descricaoVaga' é obrigatório." });
     if (curriculos.Count == 0)
