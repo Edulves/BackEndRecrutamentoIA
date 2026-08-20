@@ -158,7 +158,7 @@ app.MapPost("/api/analisar", async (
         return Results.Unauthorized();
     if (!usuario.Allowed)
         return Results.Json(
-            new { erro = "Sua conta ainda não foi aprovada pelo responsável. Quando o campo 'allowed' (Data/users.csv) estiver como true, poderá usar o sistema." },
+            new { erro = "Sua conta ainda não foi aprovada para uso, entre em contato com o responsável pelo sistema." },
             statusCode: StatusCodes.Status403Forbidden);
 
     if (string.IsNullOrWhiteSpace(descricaoVaga))
