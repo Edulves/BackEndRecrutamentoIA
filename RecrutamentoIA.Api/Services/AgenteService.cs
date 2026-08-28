@@ -44,7 +44,7 @@ public class AgenteService : IAgenteIAService
         var payload = new
         {
             model,
-            max_tokens = 2048,
+            max_tokens = 3000,
             temperature = 0.2,
             system = "Você deve responder APENAS com um JSON válido, sem nenhum texto adicional antes ou depois, sem markdown e sem blocos de código (```).",
             messages = new[]
@@ -150,6 +150,7 @@ public class AgenteService : IAgenteIAService
 
     private static string MontarPrompt(string vaga, string curriculo)
     {
+        if (vaga.Length > 8000) vaga = vaga[..8000] + "...";
         if (curriculo.Length > 8000) curriculo = curriculo[..8000] + "...";
 
         return $$"""
@@ -162,7 +163,13 @@ public class AgenteService : IAgenteIAService
           "resumo": "1-2 frases resumindo a aderência",
           "pontosFortes": ["item 1", "item 2"],
           "pontosFracos": ["item 1", "item 2"],
-          "habilidadesIdentificadas": ["skill 1", "skill 2"]
+          "habilidadesIdentificadas": ["skill 1", "skill 2"],
+          "email": "e-mail do candidato, ou null",
+          "telefone": "telefone do candidato, ou null",
+          "cidade": "cidade/UF do candidato, ou null",
+          "areasAptidao": ["1 a 3 áreas em que o candidato é bom, INDEPENDENTE da vaga analisada. Use nomes como: Administrativo, Financeiro, Comercial/Vendas, Produção/Industrial, Logística, TI/Tecnologia, RH, Jurídico, Marketing, Engenharia, Saúde, Educação, Atendimento"],
+          "experiencias": ["cargo — empresa (período)", "..."],
+          "formacao": ["curso — instituição (nível)", "..."]
         }
 
         Critérios do score:
@@ -198,7 +205,13 @@ public class AgenteService : IAgenteIAService
                 Resumo: root.TryGetProperty("resumo", out var r) ? r.GetString() ?? "" : "",
                 PontosFortes: LerLista(root, "pontosFortes"),
                 PontosFracos: LerLista(root, "pontosFracos"),
-                HabilidadesIdentificadas: LerLista(root, "habilidadesIdentificadas")
+                HabilidadesIdentificadas: LerLista(root, "habilidadesIdentificadas"),
+                AreasAptidao: LerLista(root, "areasAptidao"),
+                Email: LerTexto(root, "email"),
+                Telefone: LerTexto(root, "telefone"),
+                Cidade: LerTexto(root, "cidade"),
+                Experiencias: LerLista(root, "experiencias"),
+                Formacao: LerLista(root, "formacao")
             );
         }
         catch
@@ -207,6 +220,11 @@ public class AgenteService : IAgenteIAService
                 "Falha ao interpretar resposta da IA.", new(), new(), new());
         }
     }
+
+    private static string? LerTexto(JsonElement root, string prop) =>
+        root.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String
+            ? v.GetString()
+            : null;
 
     private static List<string> LerLista(JsonElement root, string prop)
     {

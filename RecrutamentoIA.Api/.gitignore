@@ -13,3 +13,9 @@ appsettings.*.local.json
 ## Credenciais de usuários (login/senha em CSV) — não versionar dados reais
 Data/*.csv
 !Data/users.example.csv
+
+## Cadastro de candidatos (dados reais de currículos) — não versionar
+Data/candidatos.json
+
+## Vagas cadastradas (dados de uso) — não versionar
+Data/vagas.json
