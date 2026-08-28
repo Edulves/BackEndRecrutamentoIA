@@ -73,6 +73,18 @@ public class ArquivosCandidatoService
         return destino;
     }
 
+    /// <summary>Apaga o currículo e a foto armazenados do candidato, se existirem.</summary>
+    public void RemoverArquivos(string candidatoId)
+    {
+        lock (_lockArquivos)
+        {
+            foreach (var dir in new[] { _dirCurriculos, _dirFotos })
+                if (Directory.Exists(dir))
+                    foreach (var arquivo in Directory.GetFiles(dir, candidatoId + ".*"))
+                        File.Delete(arquivo);
+        }
+    }
+
     /// <summary>Confere a assinatura binária contra o tipo declarado (JPEG/PNG/WEBP).</summary>
     public static bool BytesSaoImagem(byte[] b, string contentType) => contentType switch
     {

@@ -127,6 +127,18 @@ public class CandidatoRepository
         }
     }
 
+    /// <summary>Remove o candidato do cadastro (com o histórico); false se não existir.</summary>
+    public bool Remover(string candidatoId)
+    {
+        lock (_lock)
+        {
+            var todos = Load();
+            if (todos.RemoveAll(c => c.Id == candidatoId) == 0) return false;
+            Save(todos);
+            return true;
+        }
+    }
+
     /// <summary>
     /// Atualiza as referências de arquivo do candidato (currículo/foto). Campos
     /// null são mantidos como estão — trocar a foto não apaga o currículo.

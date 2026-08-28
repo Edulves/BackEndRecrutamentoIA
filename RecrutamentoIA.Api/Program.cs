@@ -279,6 +279,28 @@ app.MapGet("/api/candidatos", (HttpContext http, UserRepository users, Candidato
 
 // ── Arquivos do candidato: currículo original e foto de perfil ──────────
 
+app.MapDelete("/api/candidatos/{id}", (
+    string id, HttpContext http, UserRepository users,
+    CandidatoRepository candidatos, ArquivosCandidatoService arquivos, ILogger<Program> logger) =>
+{
+    var usuario = users.FindByUsername(http.User.Identity?.Name ?? string.Empty);
+    if (usuario is null)
+        return Results.Unauthorized();
+    if (!usuario.Allowed)
+        return Results.Json(
+            new { erro = "Sua conta ainda não foi aprovada para uso, entre em contato com o responsável pelo sistema." },
+            statusCode: StatusCodes.Status403Forbidden);
+
+    if (!candidatos.Remover(id))
+        return Results.NotFound(new { erro = "Candidato não encontrado." });
+    arquivos.RemoverArquivos(id);
+    logger.LogInformation("Candidato {Id} excluído por {Usuario}.", id, usuario.Username);
+
+    return Results.Ok(new { mensagem = "Candidato excluído." });
+})
+.RequireAuthorization()
+.WithName("ExcluirCandidato");
+
 app.MapGet("/api/candidatos/{id}/curriculo", (
     string id, HttpContext http, UserRepository users,
     CandidatoRepository candidatos, ArquivosCandidatoService arquivos) =>
