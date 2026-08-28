@@ -27,6 +27,12 @@ public class CandidatoRecord
     public List<string> PontosFortes { get; set; } = new();
     public List<string> PontosFracos { get; set; } = new();
     public string NomeArquivo { get; set; } = "";
+    // Arquivo original do currículo (Data/curriculos) e foto de perfil (Data/fotos);
+    // null nos candidatos importados antes do armazenamento de arquivos.
+    public string? CurriculoArquivo { get; set; }
+    public string? CurriculoContentType { get; set; }
+    public string? FotoArquivo { get; set; }
+    public string? FotoContentType { get; set; }
     public DateTime CriadoEmUtc { get; set; }
     public DateTime AtualizadoEmUtc { get; set; }
     public List<AnaliseHistorico> Historico { get; set; } = new();
@@ -85,14 +91,13 @@ public class CandidatoRepository
         lock (_lock) return Load();
     }
 
-    /// <summary>Cria ou atualiza o perfil a partir do resultado de uma análise.</summary>
-    public void Upsert(AnaliseResultado r, string vagaTitulo)
+    /// <summary>Cria ou atualiza o perfil a partir do resultado de uma análise; retorna o registro salvo.</summary>
+    public CandidatoRecord Upsert(AnaliseResultado r, string vagaTitulo)
     {
         lock (_lock)
         {
             var todos = Load();
-            var chave = ChaveDedupe(r);
-            var atual = todos.FirstOrDefault(c => ChaveDedupe(c) == chave);
+            var atual = todos.FirstOrDefault(c => MesmaPessoa(r, c));
             var agora = DateTime.UtcNow;
 
             if (atual is null)
@@ -117,6 +122,32 @@ public class CandidatoRepository
             atual.AtualizadoEmUtc = agora;
             atual.Historico.Add(new AnaliseHistorico(agora, vagaTitulo, r.Score));
 
+            Save(todos);
+            return atual;
+        }
+    }
+
+    /// <summary>
+    /// Atualiza as referências de arquivo do candidato (currículo/foto). Campos
+    /// null são mantidos como estão — trocar a foto não apaga o currículo.
+    /// </summary>
+    public void AtualizarArquivos(string candidatoId, string? curriculoArquivo, string? curriculoContentType, string? fotoArquivo, string? fotoContentType)
+    {
+        lock (_lock)
+        {
+            var todos = Load();
+            var atual = todos.FirstOrDefault(c => c.Id == candidatoId);
+            if (atual is null) return;
+            if (curriculoArquivo is not null)
+            {
+                atual.CurriculoArquivo = curriculoArquivo;
+                atual.CurriculoContentType = curriculoContentType;
+            }
+            if (fotoArquivo is not null)
+            {
+                atual.FotoArquivo = fotoArquivo;
+                atual.FotoContentType = fotoContentType;
+            }
             Save(todos);
         }
     }
@@ -149,20 +180,53 @@ public class CandidatoRepository
     private static string? PreferirNovo(string? novo, string? antigo) =>
         string.IsNullOrWhiteSpace(novo) ? antigo : novo.Trim();
 
-    private static string ChaveDedupe(AnaliseResultado r) =>
-        ChaveDedupe(r.Email, r.NomeCandidato, r.NomeArquivo);
+    // ── Dedupe: o mesmo currículo/pessoa nunca vira dois cadastros ────────
+    // Casa por QUALQUER identificador — e-mail, nome completo normalizado ou
+    // telefone normalizado — para que um currículo reimportado (com ou sem
+    // e-mail, com o telefone escrito diferente) atualize o perfil existente.
 
-    private static string ChaveDedupe(CandidatoRecord c) =>
-        ChaveDedupe(c.Email, c.Nome, c.NomeArquivo);
-
-    private static string ChaveDedupe(string? email, string? nome, string? arquivo)
+    private static bool MesmaPessoa(AnaliseResultado r, CandidatoRecord c)
     {
-        if (!string.IsNullOrWhiteSpace(email) && email.Contains('@'))
-            return "email:" + email.Trim().ToLowerInvariant();
+        var email = ChaveEmail(r.Email);
+        if (email is not null && email == ChaveEmail(c.Email)) return true;
+
+        var nome = ChaveNome(r.NomeCandidato);
+        if (nome is not null && nome == ChaveNome(c.Nome)) return true;
+
+        var tel = ChaveTelefone(r.Telefone);
+        var telExistente = ChaveTelefone(c.Telefone);
+        // ponytail: casa também por sufixo (com/sem DDD); se um dia colidir
+        // entre DDDs, exigir comparação com DDD completo
+        if (tel is not null && telExistente is not null &&
+            (tel == telExistente || tel.EndsWith(telExistente) || telExistente.EndsWith(tel)))
+            return true;
+
+        // Sem nenhum identificador extraído, o nome do arquivo é o que resta.
+        if (email is null && nome is null && tel is null)
+            return string.Equals(r.NomeArquivo?.Trim(), c.NomeArquivo?.Trim(), StringComparison.OrdinalIgnoreCase);
+
+        return false;
+    }
+
+    private static string? ChaveEmail(string? email) =>
+        !string.IsNullOrWhiteSpace(email) && email.Contains('@')
+            ? email.Trim().ToLowerInvariant()
+            : null;
+
+    private static string? ChaveNome(string? nome)
+    {
         var n = (nome ?? "").Trim().ToLowerInvariant();
-        if (n.Length > 0 && n != "não identificado")
-            return "nome:" + string.Join(' ', n.Split(' ', StringSplitOptions.RemoveEmptyEntries));
-        return "arquivo:" + (arquivo ?? "").Trim().ToLowerInvariant();
+        if (n.Length == 0 || n == "não identificado") return null;
+        return string.Join(' ', n.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    /// <summary>Só dígitos, sem o código do país; null se curto demais para identificar.</summary>
+    private static string? ChaveTelefone(string? telefone)
+    {
+        if (string.IsNullOrWhiteSpace(telefone)) return null;
+        var digitos = new string(telefone.Where(char.IsDigit).ToArray());
+        if (digitos.StartsWith("55") && digitos.Length > 11) digitos = digitos[2..];
+        return digitos.Length >= 8 ? digitos : null;
     }
 
     private List<CandidatoRecord> Load()

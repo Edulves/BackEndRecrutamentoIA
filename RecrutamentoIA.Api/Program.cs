@@ -31,6 +31,7 @@ builder.Services.AddSingleton(jwtSettings);
 builder.Services.AddSingleton(new UserRepository(builder.Environment.ContentRootPath));
 builder.Services.AddSingleton(new CandidatoRepository(builder.Environment.ContentRootPath));
 builder.Services.AddSingleton(new VagaRepository(builder.Environment.ContentRootPath));
+builder.Services.AddSingleton(new ArquivosCandidatoService(builder.Environment.ContentRootPath));
 builder.Services.AddSingleton(new TokenService(jwtSettings));
 
 builder.Services
@@ -154,6 +155,7 @@ app.MapPost("/api/analisar", async (
     IFormFileCollection curriculos,
     UserRepository users,
     CandidatoRepository candidatos,
+    ArquivosCandidatoService arquivos,
     IExtracaoTextoService extracao,
     IAgenteIAService agente,
     ILogger<Program> logger,
@@ -177,31 +179,37 @@ app.MapPost("/api/analisar", async (
 
     logger.LogInformation("Analisando {N} currículos.", curriculos.Count);
 
-    var curriculosTexto = new List<CurriculoTexto>();
+    // O IFormFile acompanha o resultado do início ao fim: dois arquivos com o
+    // mesmo nome no lote não podem trocar currículo/foto entre candidatos.
+    var extraidos = new List<(IFormFile Arquivo, CurriculoTexto Texto)>();
     foreach (var arq in curriculos)
     {
         try
         {
             var texto = await extracao.ExtrairAsync(arq, ct);
-            curriculosTexto.Add(new CurriculoTexto(arq.FileName, texto));
+            extraidos.Add((arq, new CurriculoTexto(arq.FileName, texto)));
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Falha ao extrair texto de {Nome}", arq.FileName);
-            curriculosTexto.Add(new CurriculoTexto(arq.FileName, $"[ERRO_EXTRACAO] {ex.Message}"));
+            extraidos.Add((arq, new CurriculoTexto(arq.FileName, $"[ERRO_EXTRACAO] {ex.Message}")));
         }
     }
 
     // Analisa em paralelo (limite global de chamadas simultâneas à IA)
-    var tasks = curriculosTexto.Select(async c =>
+    var tasks = extraidos.Select(async par =>
     {
         await analisesSemaforo.WaitAsync(ct);
-        try { return await agente.AnalisarCurriculoAsync(descricaoVaga, c, ct); }
+        try
+        {
+            return (par.Arquivo, Resultado: await agente.AnalisarCurriculoAsync(descricaoVaga, par.Texto, ct));
+        }
         finally { analisesSemaforo.Release(); }
     });
-    var resultados = await Task.WhenAll(tasks);
+    var analises = await Task.WhenAll(tasks);
 
-    var ranking = resultados.OrderByDescending(r => r.Score).ToList();
+    var ordenados = analises.OrderByDescending(a => a.Resultado.Score).ToList();
+    var ranking = ordenados.Select(a => a.Resultado).ToList();
 
     // Cada currículo analisado alimenta o cadastro de candidatos (Data/candidatos.json).
     var vagaTitulo = descricaoVaga
@@ -209,11 +217,31 @@ app.MapPost("/api/analisar", async (
         .Select(l => l.Trim())
         .FirstOrDefault(l => l.Length > 0) ?? "";
     if (vagaTitulo.Length > 70) vagaTitulo = vagaTitulo[..70];
-    foreach (var r in ranking)
+    foreach (var (arquivo, r) in ordenados)
     {
         // Falhas de análise/extração não viram perfil.
         if (r.NomeCandidato is "Erro" or "Erro no parse") continue;
-        try { candidatos.Upsert(r, vagaTitulo); }
+        try
+        {
+            var salvo = candidatos.Upsert(r, vagaTitulo);
+
+            // Guarda o arquivo original e tenta extrair a foto de perfil dele.
+            // ContentTypeCurriculo é a whitelist: extensão fora de pdf/docx/txt
+            // (inclusive nomes com ':') não vira arquivo armazenado.
+            var curriculoContentType = ArquivosCandidatoService.ContentTypeCurriculo(arquivo.FileName);
+            if (curriculoContentType is not null)
+            {
+                var curriculoSalvo = await arquivos.SalvarCurriculoAsync(salvo.Id, arquivo, ct);
+                string? fotoSalva = null, fotoContentType = null;
+                // A extração NUNCA sobrescreve foto existente (inclusive a enviada à mão).
+                if (salvo.FotoArquivo is null && arquivos.ExtrairFoto(arquivo) is { } foto)
+                {
+                    fotoSalva = arquivos.SalvarFoto(salvo.Id, foto.Bytes, foto.Extensao);
+                    fotoContentType = foto.ContentType;
+                }
+                candidatos.AtualizarArquivos(salvo.Id, curriculoSalvo, curriculoContentType, fotoSalva, fotoContentType);
+            }
+        }
         catch (Exception ex) { logger.LogWarning(ex, "Falha ao salvar perfil do candidato de {Arquivo}", r.NomeArquivo); }
     }
 
@@ -248,6 +276,100 @@ app.MapGet("/api/candidatos", (HttpContext http, UserRepository users, Candidato
 })
 .RequireAuthorization()
 .WithName("ListarCandidatos");
+
+// ── Arquivos do candidato: currículo original e foto de perfil ──────────
+
+app.MapGet("/api/candidatos/{id}/curriculo", (
+    string id, HttpContext http, UserRepository users,
+    CandidatoRepository candidatos, ArquivosCandidatoService arquivos) =>
+{
+    var usuario = users.FindByUsername(http.User.Identity?.Name ?? string.Empty);
+    if (usuario is null)
+        return Results.Unauthorized();
+    if (!usuario.Allowed)
+        return Results.Json(
+            new { erro = "Sua conta ainda não foi aprovada para uso, entre em contato com o responsável pelo sistema." },
+            statusCode: StatusCodes.Status403Forbidden);
+
+    var candidato = candidatos.ListAll().FirstOrDefault(c => c.Id == id);
+    if (candidato?.CurriculoArquivo is null)
+        return Results.NotFound(new { erro = "Currículo não disponível para este candidato." });
+    var caminho = arquivos.CaminhoCurriculo(candidato.CurriculoArquivo);
+    if (!File.Exists(caminho))
+        return Results.NotFound(new { erro = "Currículo não disponível para este candidato." });
+
+    return Results.File(caminho, candidato.CurriculoContentType ?? "application/octet-stream");
+})
+.RequireAuthorization()
+.WithName("BaixarCurriculoCandidato");
+
+app.MapGet("/api/candidatos/{id}/foto", (
+    string id, HttpContext http, UserRepository users,
+    CandidatoRepository candidatos, ArquivosCandidatoService arquivos) =>
+{
+    var usuario = users.FindByUsername(http.User.Identity?.Name ?? string.Empty);
+    if (usuario is null)
+        return Results.Unauthorized();
+    if (!usuario.Allowed)
+        return Results.Json(
+            new { erro = "Sua conta ainda não foi aprovada para uso, entre em contato com o responsável pelo sistema." },
+            statusCode: StatusCodes.Status403Forbidden);
+
+    var candidato = candidatos.ListAll().FirstOrDefault(c => c.Id == id);
+    if (candidato?.FotoArquivo is null)
+        return Results.NotFound(new { erro = "Este candidato não tem foto de perfil." });
+    var caminho = arquivos.CaminhoFoto(candidato.FotoArquivo);
+    if (!File.Exists(caminho))
+        return Results.NotFound(new { erro = "Este candidato não tem foto de perfil." });
+
+    return Results.File(caminho, candidato.FotoContentType ?? "image/jpeg");
+})
+.RequireAuthorization()
+.WithName("FotoCandidato");
+
+app.MapPost("/api/candidatos/{id}/foto", async (
+    string id, HttpContext http, IFormFile foto, UserRepository users,
+    CandidatoRepository candidatos, ArquivosCandidatoService arquivos, CancellationToken ct) =>
+{
+    var usuario = users.FindByUsername(http.User.Identity?.Name ?? string.Empty);
+    if (usuario is null)
+        return Results.Unauthorized();
+    if (!usuario.Allowed)
+        return Results.Json(
+            new { erro = "Sua conta ainda não foi aprovada para uso, entre em contato com o responsável pelo sistema." },
+            statusCode: StatusCodes.Status403Forbidden);
+
+    var candidato = candidatos.ListAll().FirstOrDefault(c => c.Id == id);
+    if (candidato is null)
+        return Results.NotFound(new { erro = "Candidato não encontrado." });
+
+    var ext = Path.GetExtension(foto.FileName).ToLowerInvariant();
+    if (ext == ".jpeg") ext = ".jpg";
+    var contentType = ext switch
+    {
+        ".jpg" => "image/jpeg",
+        ".png" => "image/png",
+        ".webp" => "image/webp",
+        _ => null,
+    };
+    if (contentType is null)
+        return Results.BadRequest(new { erro = "Formato de foto não suportado (use JPG, PNG ou WEBP)." });
+    if (foto.Length > 5 * 1024 * 1024)
+        return Results.BadRequest(new { erro = "Foto muito grande (máximo de 5 MB)." });
+
+    using var ms = new MemoryStream();
+    await foto.CopyToAsync(ms, ct);
+    var bytes = ms.ToArray();
+    if (!ArquivosCandidatoService.BytesSaoImagem(bytes, contentType))
+        return Results.BadRequest(new { erro = "O arquivo enviado não é uma imagem válida." });
+    var fotoSalva = arquivos.SalvarFoto(id, bytes, ext);
+    candidatos.AtualizarArquivos(id, null, null, fotoSalva, contentType);
+
+    return Results.Ok(new { fotoArquivo = fotoSalva });
+})
+.DisableAntiforgery()
+.RequireAuthorization()
+.WithName("EnviarFotoCandidato");
 
 // ── Vagas cadastradas ────────────────────────────────────────────────────
 // Ao cadastrar uma vaga, os candidatos do cadastro são analisados contra ela

@@ -19,3 +19,7 @@ Data/candidatos.json
 
 ## Vagas cadastradas (dados de uso) — não versionar
 Data/vagas.json
+
+## Currículos originais e fotos de perfil (dados reais) — não versionar
+Data/curriculos/
+Data/fotos/
