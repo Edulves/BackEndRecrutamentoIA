@@ -35,6 +35,7 @@ public class ArquivosCandidatoService
     /// <summary>
     /// Salva o arquivo original do currículo; retorna o nome salvo (Id + extensão).
     /// Só aceita as extensões da whitelist (as mesmas de ContentTypeCurriculo).
+    /// Otimizado: remove varredura de Directory.GetFiles(), deleta arquivos antigos diretamente.
     /// </summary>
     public async Task<string> SalvarCurriculoAsync(string candidatoId, IFormFile arquivo, CancellationToken ct)
     {
@@ -49,25 +50,39 @@ public class ArquivosCandidatoService
         lock (_lockArquivos)
         {
             Directory.CreateDirectory(_dirCurriculos);
-            // reimportação com outra extensão (pdf -> docx) não deixa arquivo velho para trás
-            foreach (var antigo in Directory.GetFiles(_dirCurriculos, candidatoId + ".*"))
-                if (!Path.GetFileName(antigo).Equals(destino, StringComparison.OrdinalIgnoreCase))
+            var caminhoDestino = Path.Combine(_dirCurriculos, destino);
+            
+            // Remove arquivos antigos com outras extensões (pdf -> docx)
+            // Sem varredura com padrão: deleta extensões conhecidas que não sejam a atual
+            foreach (var ext in new[] { ".pdf", ".docx", ".txt" })
+            {
+                if (ext.Equals(Path.GetExtension(destino), StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var antigo = Path.Combine(_dirCurriculos, candidatoId + ext);
+                if (File.Exists(antigo))
                     File.Delete(antigo);
-            File.WriteAllBytes(Path.Combine(_dirCurriculos, destino), bytes);
+            }
+            File.WriteAllBytes(caminhoDestino, bytes);
         }
         return destino;
     }
 
-    /// <summary>Salva a foto de perfil, removendo foto anterior de outra extensão.</summary>
+    /// <summary>Salva a foto de perfil, removendo foto anterior de outra extensão. Otimizado: sem Directory.GetFiles().</summary>
     public string SalvarFoto(string candidatoId, byte[] bytes, string extensao)
     {
         var destino = candidatoId + extensao;
         lock (_lockArquivos)
         {
             Directory.CreateDirectory(_dirFotos);
-            foreach (var antiga in Directory.GetFiles(_dirFotos, candidatoId + ".*"))
-                if (!Path.GetFileName(antiga).Equals(destino, StringComparison.OrdinalIgnoreCase))
+            // Remove fotos antigas com outras extensões
+            foreach (var ext in new[] { ".jpg", ".png", ".gif", ".bmp", ".webp" })
+            {
+                if (ext.Equals(extensao, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var antiga = Path.Combine(_dirFotos, candidatoId + ext);
+                if (File.Exists(antiga))
                     File.Delete(antiga);
+            }
             File.WriteAllBytes(Path.Combine(_dirFotos, destino), bytes);
         }
         return destino;

@@ -179,20 +179,20 @@ app.MapPost("/api/analisar", async (
 
     logger.LogInformation("Analisando {N} currículos.", curriculos.Count);
 
-    // O IFormFile acompanha o resultado do início ao fim: dois arquivos com o
-    // mesmo nome no lote não podem trocar currículo/foto entre candidatos.
-    var extraidos = new List<(IFormFile Arquivo, CurriculoTexto Texto)>();
+    // Otimização #2: Extrai texto + foto numa única passada por arquivo (parse único)
+    // O IFormFile acompanha o resultado: dois arquivos com mesmo nome não trocam dados
+    var extraidos = new List<(IFormFile Arquivo, Extracao Extracao)>();
     foreach (var arq in curriculos)
     {
         try
         {
-            var texto = await extracao.ExtrairAsync(arq, ct);
-            extraidos.Add((arq, new CurriculoTexto(arq.FileName, texto)));
+            var extracao_result = await extracao.ExtrairAsync(arq, ct);
+            extraidos.Add((arq, extracao_result));
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Falha ao extrair texto de {Nome}", arq.FileName);
-            extraidos.Add((arq, new CurriculoTexto(arq.FileName, $"[ERRO_EXTRACAO] {ex.Message}")));
+            extraidos.Add((arq, new Extracao($"[ERRO_EXTRACAO] {ex.Message}", null)));
         }
     }
 
@@ -202,7 +202,8 @@ app.MapPost("/api/analisar", async (
         await analisesSemaforo.WaitAsync(ct);
         try
         {
-            return (par.Arquivo, Resultado: await agente.AnalisarCurriculoAsync(descricaoVaga, par.Texto, ct));
+            var curriculoTexto = new CurriculoTexto(par.Arquivo.FileName, par.Extracao.Texto);
+            return (par.Arquivo, par.Extracao, Resultado: await agente.AnalisarCurriculoAsync(descricaoVaga, curriculoTexto, ct));
         }
         finally { analisesSemaforo.Release(); }
     });
@@ -211,38 +212,50 @@ app.MapPost("/api/analisar", async (
     var ordenados = analises.OrderByDescending(a => a.Resultado.Score).ToList();
     var ranking = ordenados.Select(a => a.Resultado).ToList();
 
-    // Cada currículo analisado alimenta o cadastro de candidatos (Data/candidatos.json).
+    // Otimização #1: Batch upsert — salva TODOS os candidatos com 1 Load+Save
     var vagaTitulo = descricaoVaga
         .Split('\n')
         .Select(l => l.Trim())
         .FirstOrDefault(l => l.Length > 0) ?? "";
     if (vagaTitulo.Length > 70) vagaTitulo = vagaTitulo[..70];
-    foreach (var (arquivo, r) in ordenados)
+
+    // Primeiro: faz upsert batch de TODOS os candidatos (1 Load+Save)
+    var upsertDataList = ordenados
+        .Where(x => x.Resultado.NomeCandidato is not ("Erro" or "Erro no parse"))
+        .Select(x => (x.Resultado, vagaTitulo))
+        .ToList();
+    
+    var salvos = candidatos.UpsertBatch(upsertDataList);
+
+    // Segundo: salva arquivos e fotos dos candidatos que foram salvos
+    // Agora sabemos o ID de cada candidato
+    for (int i = 0; i < salvos.Count && i < ordenados.Count; i++)
     {
-        // Falhas de análise/extração não viram perfil.
-        if (r.NomeCandidato is "Erro" or "Erro no parse") continue;
+        var (arquivo, extracao_result, _) = ordenados[i];
+        var salvo = salvos[i];
+        
+        var contentType = ArquivosCandidatoService.ContentTypeCurriculo(arquivo.FileName);
+        if (contentType is null) continue;
+
         try
         {
-            var salvo = candidatos.Upsert(r, vagaTitulo);
-
-            // Guarda o arquivo original e tenta extrair a foto de perfil dele.
-            // ContentTypeCurriculo é a whitelist: extensão fora de pdf/docx/txt
-            // (inclusive nomes com ':') não vira arquivo armazenado.
-            var curriculoContentType = ArquivosCandidatoService.ContentTypeCurriculo(arquivo.FileName);
-            if (curriculoContentType is not null)
+            // Salva currículo com o ID real do candidato
+            var curriculoSalvo = await arquivos.SalvarCurriculoAsync(salvo.Id, arquivo, ct);
+            string? fotoSalva = null, fotoContentType = null;
+            
+            // Foto já foi extraída na mesma passada, tenta salvar se houver
+            if (extracao_result.Foto is { } foto)
             {
-                var curriculoSalvo = await arquivos.SalvarCurriculoAsync(salvo.Id, arquivo, ct);
-                string? fotoSalva = null, fotoContentType = null;
-                // A extração NUNCA sobrescreve foto existente (inclusive a enviada à mão).
-                if (salvo.FotoArquivo is null && arquivos.ExtrairFoto(arquivo) is { } foto)
-                {
-                    fotoSalva = arquivos.SalvarFoto(salvo.Id, foto.Bytes, foto.Extensao);
-                    fotoContentType = foto.ContentType;
-                }
-                candidatos.AtualizarArquivos(salvo.Id, curriculoSalvo, curriculoContentType, fotoSalva, fotoContentType);
+                fotoSalva = arquivos.SalvarFoto(salvo.Id, foto.Bytes, foto.Extensao);
+                fotoContentType = foto.ContentType;
             }
+            
+            candidatos.AtualizarArquivos(salvo.Id, curriculoSalvo, contentType, fotoSalva, fotoContentType);
         }
-        catch (Exception ex) { logger.LogWarning(ex, "Falha ao salvar perfil do candidato de {Arquivo}", r.NomeArquivo); }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Falha ao salvar arquivos do candidato {Id}", salvo.Id);
+        }
     }
 
     var response = new AnaliseResponse(

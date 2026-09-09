@@ -67,11 +67,15 @@ public class CandidatoRecord
 /// Persistência dos perfis de candidatos em Data/candidatos.json — mesmo espírito
 /// sem-banco do users.csv. Reimportar o mesmo candidato atualiza o perfil
 /// (dedupe por e-mail; sem e-mail, por nome normalizado).
+/// Otimização: cache em memória com batch write para reduzir I/O de 200× para 1× por lote.
 /// </summary>
 public class CandidatoRepository
 {
     private readonly string _file;
     private readonly object _lock = new();
+    private List<CandidatoRecord>? _cache = null;
+    private bool _cacheLoaded = false;
+    
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -97,34 +101,62 @@ public class CandidatoRepository
         lock (_lock)
         {
             var todos = Load();
-            var atual = todos.FirstOrDefault(c => MesmaPessoa(r, c));
-            var agora = DateTime.UtcNow;
-
-            if (atual is null)
-            {
-                atual = new CandidatoRecord { CriadoEmUtc = agora };
-                todos.Add(atual);
-            }
-
-            // Campos novos sobrescrevem quando vierem preenchidos; senão mantém o que havia.
-            atual.Nome = PreferirNovo(r.NomeCandidato, atual.Nome) ?? "";
-            atual.Email = PreferirNovo(r.Email, atual.Email);
-            atual.Telefone = PreferirNovo(r.Telefone, atual.Telefone);
-            atual.Cidade = PreferirNovo(r.Cidade, atual.Cidade);
-            if (r.AreasAptidao is { Count: > 0 }) atual.AreasAptidao = r.AreasAptidao;
-            if (r.HabilidadesIdentificadas.Count > 0) atual.Habilidades = r.HabilidadesIdentificadas;
-            if (r.Experiencias is { Count: > 0 }) atual.Experiencias = r.Experiencias;
-            if (r.Formacao is { Count: > 0 }) atual.Formacao = r.Formacao;
-            atual.Resumo = PreferirNovo(r.Resumo, atual.Resumo) ?? "";
-            if (r.PontosFortes.Count > 0) atual.PontosFortes = r.PontosFortes;
-            if (r.PontosFracos.Count > 0) atual.PontosFracos = r.PontosFracos;
-            atual.NomeArquivo = PreferirNovo(r.NomeArquivo, atual.NomeArquivo) ?? "";
-            atual.AtualizadoEmUtc = agora;
-            atual.Historico.Add(new AnaliseHistorico(agora, vagaTitulo, r.Score));
-
+            var atual = UpsertInterno(todos, r, vagaTitulo);
             Save(todos);
             return atual;
         }
+    }
+
+    /// <summary>
+    /// Batch upsert: processa múltiplos resultados numa única operação de Load+Save.
+    /// Retorna os registros salvos, sem gravar armazenamento de arquivos.
+    /// Use após SalvarCurriculoAsync/SalvarFoto para evitar I/O múltiplo.
+    /// </summary>
+    public List<CandidatoRecord> UpsertBatch(IEnumerable<(AnaliseResultado Resultado, string VagaTitulo)> analises)
+    {
+        lock (_lock)
+        {
+            var todos = Load();
+            var salvos = new List<CandidatoRecord>();
+            foreach (var (r, vaga) in analises)
+            {
+                var atual = UpsertInterno(todos, r, vaga);
+                salvos.Add(atual);
+            }
+            Save(todos);
+            return salvos;
+        }
+    }
+
+    /// <summary>Lógica interna de upsert (sem lock, usado por Upsert e UpsertBatch).</summary>
+    private static CandidatoRecord UpsertInterno(List<CandidatoRecord> todos, AnaliseResultado r, string vagaTitulo)
+    {
+        var atual = todos.FirstOrDefault(c => MesmaPessoa(r, c));
+        var agora = DateTime.UtcNow;
+
+        if (atual is null)
+        {
+            atual = new CandidatoRecord { CriadoEmUtc = agora };
+            todos.Add(atual);
+        }
+
+        // Campos novos sobrescrevem quando vierem preenchidos; senão mantém o que havia.
+        atual.Nome = PreferirNovo(r.NomeCandidato, atual.Nome) ?? "";
+        atual.Email = PreferirNovo(r.Email, atual.Email);
+        atual.Telefone = PreferirNovo(r.Telefone, atual.Telefone);
+        atual.Cidade = PreferirNovo(r.Cidade, atual.Cidade);
+        if (r.AreasAptidao is { Count: > 0 }) atual.AreasAptidao = r.AreasAptidao;
+        if (r.HabilidadesIdentificadas.Count > 0) atual.Habilidades = r.HabilidadesIdentificadas;
+        if (r.Experiencias is { Count: > 0 }) atual.Experiencias = r.Experiencias;
+        if (r.Formacao is { Count: > 0 }) atual.Formacao = r.Formacao;
+        atual.Resumo = PreferirNovo(r.Resumo, atual.Resumo) ?? "";
+        if (r.PontosFortes.Count > 0) atual.PontosFortes = r.PontosFortes;
+        if (r.PontosFracos.Count > 0) atual.PontosFracos = r.PontosFracos;
+        atual.NomeArquivo = PreferirNovo(r.NomeArquivo, atual.NomeArquivo) ?? "";
+        atual.AtualizadoEmUtc = agora;
+        atual.Historico.Add(new AnaliseHistorico(agora, vagaTitulo, r.Score));
+
+        return atual;
     }
 
     /// <summary>Remove o candidato do cadastro (com o histórico); false se não existir.</summary>
@@ -243,18 +275,48 @@ public class CandidatoRepository
 
     private List<CandidatoRecord> Load()
     {
-        if (!File.Exists(_file)) return new List<CandidatoRecord>();
+        // Se cache já foi carregado, devolve a cópia (não sincroniza novamente com disco a cada operação).
+        if (_cacheLoaded && _cache is not null)
+            return _cache;
+        
+        if (!File.Exists(_file))
+        {
+            _cache = new List<CandidatoRecord>();
+            _cacheLoaded = true;
+            return _cache;
+        }
         var json = File.ReadAllText(_file);
-        if (string.IsNullOrWhiteSpace(json)) return new List<CandidatoRecord>();
-        return JsonSerializer.Deserialize<List<CandidatoRecord>>(json, JsonOpts) ?? new List<CandidatoRecord>();
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            _cache = new List<CandidatoRecord>();
+            _cacheLoaded = true;
+            return _cache;
+        }
+        _cache = JsonSerializer.Deserialize<List<CandidatoRecord>>(json, JsonOpts) ?? new List<CandidatoRecord>();
+        _cacheLoaded = true;
+        return _cache;
     }
 
     private void Save(List<CandidatoRecord> todos)
     {
-        // Escrita atômica: processo morto no meio não deixa JSON truncado.
+        // Atualiza cache e escreve de forma atômica: processo morto no meio não deixa JSON truncado.
+        _cache = todos;
         Directory.CreateDirectory(Path.GetDirectoryName(_file)!);
         var tmp = _file + ".tmp";
         File.WriteAllText(tmp, JsonSerializer.Serialize(todos, JsonOpts));
         File.Move(tmp, _file, overwrite: true);
+    }
+
+    /// <summary>
+    /// Força recarga do arquivo do disco (útil após alterações externas ou testes).
+    /// Limpa o cache para próxima leitura.
+    /// </summary>
+    public void InvalidarCache()
+    {
+        lock (_lock)
+        {
+            _cache = null;
+            _cacheLoaded = false;
+        }
     }
 }
