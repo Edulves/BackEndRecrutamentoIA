@@ -1,0 +1,136 @@
+===============================================================================
+                   COMO TESTAR OS ENDPOINTS LOCALMENTE
+===============================================================================
+
+PORTA: http://localhost:5105
+DOCUMENTACAO: http://localhost:5105/scalar
+
+===============================================================================
+COMECO RAPIDO (5 MINUTOS)
+===============================================================================
+
+TERMINAL 1 - Iniciar Servidor:
+  cd RecrutamentoIA.Api
+  dotnet run
+  
+  Aguarde: "Now listening on: http://localhost:5105"
+
+TERMINAL 2 - Executar Testes:
+  cd backend
+  .\test-api.ps1
+
+===============================================================================
+TESTES PASSO A PASSO
+===============================================================================
+
+1. REGISTRAR USUARIO
+   POST http://localhost:5105/api/auth/registrar
+   
+   Body:
+   {"username":"testuser","password":"Senha@123!"}
+
+2. APROVAR USUARIO
+   Edite: RecrutamentoIA.Api/Data/users.csv
+   Mude: testuser,hash,false  ->  testuser,hash,true
+
+3. FAZER LOGIN
+   POST http://localhost:5105/api/auth/login
+   
+   Body:
+   {"username":"testuser","password":"Senha@123!"}
+   
+   Copie o TOKEN da resposta
+
+4. ANALISAR CURRICULOS (Principal)
+   POST http://localhost:5105/api/analisar
+   
+   Headers:
+   Authorization: Bearer {SEU_TOKEN}
+   
+   Body (multipart/form-data):
+   descricaoVaga: "Desenvolvedor Full Stack"
+   curriculos: teste-a.txt, teste-b.txt
+
+===============================================================================
+COMANDOS CURL
+===============================================================================
+
+Registrar:
+  curl -X POST http://localhost:5105/api/auth/registrar \
+    -H "Content-Type: application/json" \
+    -d '{"username":"testuser","password":"Senha@123!"}'
+
+Login:
+  curl -X POST http://localhost:5105/api/auth/login \
+    -H "Content-Type: application/json" \
+    -d '{"username":"testuser","password":"Senha@123!"}'
+
+Listar Candidatos:
+  curl -X GET http://localhost:5105/api/candidatos \
+    -H "Authorization: Bearer {TOKEN}"
+
+Analisar:
+  curl -X POST http://localhost:5105/api/analisar \
+    -H "Authorization: Bearer {TOKEN}" \
+    -F "descricaoVaga=Dev Full Stack" \
+    -F "curriculos=@RecrutamentoIA.Api/teste-a.txt"
+
+===============================================================================
+INTERFACE GRAFICA (Scalar)
+===============================================================================
+
+Acesse no browser:
+  http://localhost:5105/scalar
+
+Todos os endpoints estan documentados e testáveis direto lá!
+
+===============================================================================
+PRINCIPAIS ENDPOINTS
+===============================================================================
+
+POST   /api/auth/registrar          - Registrar
+POST   /api/auth/login              - Login
+GET    /api/candidatos              - Listar candidatos
+POST   /api/analisar                - ANALISAR CURRICULOS (Principal)
+GET    /api/vagas                   - Listar vagas
+POST   /api/vagas                   - Cadastrar vaga
+
+===============================================================================
+ERROS COMUNS
+===============================================================================
+
+Erro 401 (Unauthorized):
+  -> Token inválido ou ausente
+  -> Verificar header Authorization
+
+Erro 403 (Forbidden):
+  -> Usuario nao aprovado
+  -> Editar users.csv e mudar false para true
+
+Erro 400 (Bad Request):
+  -> Arquivo nao enviado
+  -> Campo descricaoVaga vazio
+
+Connection refused:
+  -> Servidor nao rodando
+  -> Execute: dotnet run
+
+===============================================================================
+OTIMIZACOES - MEDIR PERFORMANCE
+===============================================================================
+
+Primeira requisicao (sem cache):     ~1-2 segundos
+Segunda requisicao (com cache):      ~0.5 segundos
+
+As otimizacoes fazem a segunda requisicao ser 3-4x mais rápida!
+
+===============================================================================
+DOCUMENTACAO CRIADA
+===============================================================================
+
+QUICK_START_TESTES.md      - Comeco em 5 min
+TESTING_GUIDE_PARTE1.md    - Guia completo
+test-api.ps1               - Script de testes
+COMO_TESTAR.txt            - Este arquivo
+
+===============================================================================

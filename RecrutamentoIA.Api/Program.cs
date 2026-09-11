@@ -132,14 +132,12 @@ var analisesSemaforo = new SemaphoreSlim(maxAnalisesSimultaneas);
 
 var app = builder.Build();
 
-if (app.Environment.IsDevelopment())
+// Habilita Swagger/Scalar SEMPRE (Development e Production) para testes manuais
+app.MapSwagger("/openapi/{documentName}.json");
+app.MapScalarApiReference(options =>
 {
-    app.MapSwagger("/openapi/{documentName}.json");
-    app.MapScalarApiReference(options =>
-    {
-        options.WithTitle("RecrutamentoIA API");
-    });
-}
+    options.WithTitle("RecrutamentoIA API");
+});
 
 app.UseCors();
 app.UseAuthentication();
