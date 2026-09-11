@@ -110,10 +110,19 @@ builder.Services.AddHttpClient<IAgenteIAService, AgenteService>(c =>
     c.Timeout = TimeSpan.FromMinutes(2);
 });
 
-builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
-    p.WithOrigins("http://localhost:5173", "http://localhost:4173")
-     .AllowAnyHeader()
-     .AllowAnyMethod()));
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("Frontend", policy =>
+    {
+        policy
+            .WithOrigins(
+                "https://recrutamentoia.foxheart.com.br",
+                "http://localhost:5173"
+            )
+            .AllowAnyHeader()
+            .AllowAnyMethod();
+    });
+});
 
 // Aumenta limite de upload (múltiplos currículos)
 builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(o =>
