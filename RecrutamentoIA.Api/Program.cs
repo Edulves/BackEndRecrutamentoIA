@@ -148,7 +148,8 @@ app.MapScalarApiReference(options =>
     options.WithTitle("RecrutamentoIA API");
 });
 
-app.UseCors();
+app.UseCors("Frontend");
+
 app.UseAuthentication();
 app.UseAuthorization();
 
